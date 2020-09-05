@@ -410,9 +410,9 @@ static enum flow_dissect_ret
 __skb_flow_dissect_mpls(const struct sk_buff *skb,
 			struct flow_dissector *flow_dissector,
 			void *target_container, const void *data, int nhoff,
-			int hlen, int lse_index, bool *entropy_label)
+			int hlen, int lse_index, bool *entropy_label, __be16 *proto)
 {
-	struct mpls_label *hdr, _hdr;
+	struct mpls_label *hdr, _hdr[2];
 	u32 entry, label, bos;
 
 	if (!dissector_uses_key(flow_dissector,
@@ -428,7 +428,7 @@ __skb_flow_dissect_mpls(const struct sk_buff *skb,
 	if (!hdr)
 		return FLOW_DISSECT_RET_OUT_BAD;
 
-	entry = ntohl(hdr->entry);
+	entry = ntohl(hdr[0].entry);
 	label = (entry & MPLS_LS_LABEL_MASK) >> MPLS_LS_LABEL_SHIFT;
 	bos = (entry & MPLS_LS_S_MASK) >> MPLS_LS_S_SHIFT;
 
@@ -461,7 +461,19 @@ __skb_flow_dissect_mpls(const struct sk_buff *skb,
 
 	*entropy_label = label == MPLS_LABEL_ENTROPY;
 
-	return bos ? FLOW_DISSECT_RET_OUT_GOOD : FLOW_DISSECT_RET_PROTO_AGAIN;
+	if (bos) {
+		/* A wild assumption. I use IPv4 and IPv6 only */
+		u8 firstbyte = ntohl(hdr[1].entry) >> 24;
+		if (0x45 <= firstbyte && firstbyte <= 0x4f) {
+			*proto = htons(ETH_P_IP);
+			return FLOW_DISSECT_RET_PROTO_AGAIN;
+		} else if (0x60 <= firstbyte && firstbyte <= 0x6f) {
+			*proto = htons(ETH_P_IPV6);
+			return FLOW_DISSECT_RET_PROTO_AGAIN;
+		}
+		return FLOW_DISSECT_RET_OUT_GOOD;
+	}
+	return FLOW_DISSECT_RET_PROTO_AGAIN;
 }
 
 static enum flow_dissect_ret
@@ -1236,7 +1248,7 @@ proto_again:
 		fdret = __skb_flow_dissect_mpls(skb, flow_dissector,
 						target_container, data,
 						nhoff, hlen, mpls_lse,
-						&mpls_el);
+						&mpls_el, &proto);
 		nhoff += sizeof(struct mpls_label);
 		mpls_lse++;
 		break;
@@ -1772,6 +1784,11 @@ static const struct flow_dissector_key flow_keys_dissector_keys[] = {
 	},
 	{
 		.key_id = FLOW_DISSECTOR_KEY_GRE_KEYID,
+		.offset = offsetof(struct flow_keys, keyid),
+	},
+	{
+		.key_id = FLOW_DISSECTOR_KEY_MPLS,
+		/* XXX: Reusing keyid */
 		.offset = offsetof(struct flow_keys, keyid),
 	},
 };
