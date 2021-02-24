@@ -1988,6 +1988,7 @@ static bool rt6_mtu_change_route_allowed(struct inet6_dev *idev,
 	if (dst_mtu(&rt->dst) >= mtu)
 		return true;
 
+	/* XXX: MTU */
 	if (dst_mtu(&rt->dst) == idev->cnf.mtu6)
 		return true;
 
@@ -4787,6 +4788,7 @@ static int fib6_nh_mtu_change(struct fib6_nh *nh, void *_arg)
 		struct inet6_dev *idev = __in6_dev_get(arg->dev);
 		u32 mtu = f6i->fib6_pmtu;
 
+		/* XXX: MTU */
 		if (mtu >= arg->mtu ||
 		    (mtu < arg->mtu && mtu == idev->cnf.mtu6))
 			fib6_metric_set(f6i, RTAX_MTU, arg->mtu);

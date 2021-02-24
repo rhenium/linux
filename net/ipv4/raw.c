@@ -355,6 +355,7 @@ static int raw_send_hdrinc(struct sock *sk, struct flowi4 *fl4,
 	struct rtable *rt = *rtp;
 	int hlen, tlen;
 
+	/* XXX: MTU */
 	if (length > rt->dst.dev->mtu) {
 		ip_local_error(sk, EMSGSIZE, fl4->daddr, inet->inet_dport,
 			       rt->dst.dev->mtu);
