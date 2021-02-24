@@ -311,23 +311,23 @@ static inline bool rt6_duplicate_nexthop(struct fib6_info *a, struct fib6_info *
 
 static inline unsigned int ip6_dst_mtu_forward(const struct dst_entry *dst)
 {
+	struct rt6_info *rt = (struct rt6_info *)dst;
+	struct fib6_info *f6i = rcu_dereference(rt->from);
 	struct inet6_dev *idev;
-	unsigned int mtu;
+	unsigned int mtu = f6i->fib6_pmtu;
 
-	if (dst_metric_locked(dst, RTAX_MTU)) {
-		mtu = dst_metric_raw(dst, RTAX_MTU);
-		if (mtu)
-			return mtu;
+	if (!mtu) {
+		rcu_read_lock();
+		idev = __in6_dev_get(dst->dev);
+		if (idev)
+			mtu = idev->cnf.mtu6;
+		rcu_read_unlock();
+
+		if (!mtu)
+			return IPV6_MIN_MTU;
+		mtu -= lwtunnel_headroom(dst->lwtstate, mtu);
 	}
-
-	mtu = IPV6_MIN_MTU;
-	rcu_read_lock();
-	idev = __in6_dev_get(dst->dev);
-	if (idev)
-		mtu = idev->cnf.mtu6;
-	rcu_read_unlock();
-
-	return mtu;
+	return max_t(unsigned int, mtu, IPV6_MIN_MTU);
 }
 
 u32 ip6_mtu_from_fib6(const struct fib6_result *res,

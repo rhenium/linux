@@ -1568,11 +1568,9 @@ __rt6_find_exception_rcu(struct rt6_exception_bucket **bucket,
 static unsigned int fib6_mtu(const struct fib6_result *res)
 {
 	const struct fib6_nh *nh = res->nh;
-	unsigned int mtu;
+	unsigned int mtu = res->f6i->fib6_pmtu;
 
-	if (res->f6i->fib6_pmtu) {
-		mtu = res->f6i->fib6_pmtu;
-	} else {
+	if (!mtu) {
 		struct net_device *dev = nh->fib_nh_dev;
 		struct inet6_dev *idev;
 
@@ -1580,11 +1578,11 @@ static unsigned int fib6_mtu(const struct fib6_result *res)
 		idev = __in6_dev_get(dev);
 		mtu = idev->cnf.mtu6;
 		rcu_read_unlock();
+
+		mtu -= lwtunnel_headroom(nh->fib_nh_lws, mtu);
 	}
 
-	mtu = min_t(unsigned int, mtu, IP6_MAX_MTU);
-
-	return mtu - lwtunnel_headroom(nh->fib_nh_lws, mtu);
+	return clamp_t(unsigned int, mtu, IPV6_MIN_MTU, IP6_MAX_MTU);
 }
 
 #define FIB6_EXCEPTION_BUCKET_FLUSHED  0x1UL
@@ -3078,26 +3076,23 @@ INDIRECT_CALLABLE_SCOPE unsigned int ip6_mtu(const struct dst_entry *dst)
 	unsigned int mtu;
 
 	mtu = dst_metric_raw(dst, RTAX_MTU);
-	if (mtu)
-		goto out;
+	if (!mtu) {
+		rcu_read_lock();
+		idev = __in6_dev_get(dst->dev);
+		if (idev)
+			mtu = idev->cnf.mtu6;
+		rcu_read_unlock();
 
-	mtu = IPV6_MIN_MTU;
-
-	rcu_read_lock();
-	idev = __in6_dev_get(dst->dev);
-	if (idev)
-		mtu = idev->cnf.mtu6;
-	rcu_read_unlock();
-
-out:
-	mtu = min_t(unsigned int, mtu, IP6_MAX_MTU);
-
-	return mtu - lwtunnel_headroom(dst->lwtstate, mtu);
+		if (!mtu)
+			return IPV6_MIN_MTU;
+		mtu -= lwtunnel_headroom(dst->lwtstate, mtu);
+	}
+	return clamp_t(unsigned int, mtu, IPV6_MIN_MTU, IP6_MAX_MTU);
 }
 EXPORT_INDIRECT_CALLABLE(ip6_mtu);
 
 /* MTU selection:
- * 1. mtu on route is locked - use it
+ * 1. mtu on route - use it
  * 2. mtu from nexthop exception
  * 3. mtu from egress device
  *
@@ -3108,33 +3103,29 @@ u32 ip6_mtu_from_fib6(const struct fib6_result *res,
 		      const struct in6_addr *daddr,
 		      const struct in6_addr *saddr)
 {
-	const struct fib6_nh *nh = res->nh;
 	struct fib6_info *f6i = res->f6i;
-	struct inet6_dev *idev;
-	struct rt6_info *rt;
-	u32 mtu = 0;
+	u32 mtu = f6i->fib6_pmtu;
 
-	if (unlikely(fib6_metric_locked(f6i, RTAX_MTU))) {
-		mtu = f6i->fib6_pmtu;
-		if (mtu)
-			goto out;
+	if (likely(!mtu)) {
+		struct rt6_info *rt = rt6_find_cached_rt(res, daddr, saddr);
+		if (unlikely(rt))
+			mtu = dst_metric_raw(&rt->dst, RTAX_MTU);
 	}
 
-	rt = rt6_find_cached_rt(res, daddr, saddr);
-	if (unlikely(rt)) {
-		mtu = dst_metric_raw(&rt->dst, RTAX_MTU);
-	} else {
+	if (likely(!mtu)) {
+		const struct fib6_nh *nh = res->nh;
 		struct net_device *dev = nh->fib_nh_dev;
+		struct inet6_dev *idev;
 
-		mtu = IPV6_MIN_MTU;
 		idev = __in6_dev_get(dev);
-		if (idev && idev->cnf.mtu6 > mtu)
+		if (idev)
 			mtu = idev->cnf.mtu6;
-	}
 
-	mtu = min_t(unsigned int, mtu, IP6_MAX_MTU);
-out:
-	return mtu - lwtunnel_headroom(nh->fib_nh_lws, mtu);
+		if (!mtu)
+			return IPV6_MIN_MTU;
+		mtu -= lwtunnel_headroom(nh->fib_nh_lws, mtu);
+	}
+	return clamp_t(unsigned int, mtu, IPV6_MIN_MTU, IP6_MAX_MTU);
 }
 
 struct dst_entry *icmp6_dst_alloc(struct net_device *dev,
