@@ -1308,16 +1308,13 @@ INDIRECT_CALLABLE_SCOPE unsigned int ipv4_mtu(const struct dst_entry *dst)
 	if (mtu)
 		return mtu;
 
-	mtu = READ_ONCE(dst->dev->mtu);
-
+	mtu = READ_ONCE(dst->dev->mtu) - lwtunnel_headroom(dst->lwtstate, mtu);
 	if (unlikely(ip_mtu_locked(dst))) {
 		if (rt->rt_uses_gateway && mtu > 576)
 			mtu = 576;
 	}
 
-	mtu = min_t(unsigned int, mtu, IP_MAX_MTU);
-
-	return mtu - lwtunnel_headroom(dst->lwtstate, mtu);
+	return min_t(unsigned int, mtu, IP_MAX_MTU);
 }
 EXPORT_INDIRECT_CALLABLE(ipv4_mtu);
 
@@ -1382,7 +1379,7 @@ static struct fib_nh_exception *find_exception(struct fib_nh_common *nhc,
 }
 
 /* MTU selection:
- * 1. mtu on route is locked - use it
+ * 1. mtu on route - use it
  * 2. mtu from nexthop exception
  * 3. mtu from egress device
  */
@@ -1392,11 +1389,7 @@ u32 ip_mtu_from_fib_result(struct fib_result *res, __be32 daddr)
 	struct fib_nh_common *nhc = res->nhc;
 	struct net_device *dev = nhc->nhc_dev;
 	struct fib_info *fi = res->fi;
-	u32 mtu = 0;
-
-	if (dev_net(dev)->ipv4.sysctl_ip_fwd_use_pmtu ||
-	    fi->fib_metrics->metrics[RTAX_LOCK - 1] & (1 << RTAX_MTU))
-		mtu = fi->fib_mtu;
+	u32 mtu = fi->fib_mtu;
 
 	if (likely(!mtu)) {
 		struct fib_nh_exception *fnhe;
@@ -1407,9 +1400,9 @@ u32 ip_mtu_from_fib_result(struct fib_result *res, __be32 daddr)
 	}
 
 	if (likely(!mtu))
-		mtu = min(READ_ONCE(dev->mtu), IP_MAX_MTU);
+		mtu = READ_ONCE(dev->mtu) - lwtunnel_headroom(nhc->nhc_lwtstate, mtu);
 
-	return mtu - lwtunnel_headroom(nhc->nhc_lwtstate, mtu);
+	return min_t(u32, mtu, IP_MAX_MTU);
 }
 
 static bool rt_bind_exception(struct rtable *rt, struct fib_nh_exception *fnhe,
